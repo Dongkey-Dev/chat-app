@@ -1,0 +1,24 @@
+services:
+  fastapi:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    container_name: fastapi_app
+    ports:
+      - "8000:8000"
+    networks:
+      - anchoreer_network      
+    depends_on:
+      - redis
+    environment:
+      - REDIS_HOST=http://redis:6379
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+
+
+networks:
+  anchoreer_network:
