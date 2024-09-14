@@ -10,8 +10,20 @@ services:
       - anchoreer_network      
     depends_on:
       - redis
+      - mongodb
     environment:
-      - REDIS_HOST=http://redis:6379
+      - REDIS_HOST=http://redis
+      - REDIS_PORT=6379
+      - MONGO_HOST=http://mongodb
+      - MONGO_PORT=27017
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
 
   redis:
     image: redis:latest
