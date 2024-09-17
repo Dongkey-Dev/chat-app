@@ -2,7 +2,7 @@ services:
   fastapi:
     build:
       context: .
-      dockerfile: server/Dockerfile
+      dockerfile: Dockerfile
     container_name: fastapi_app
     ports:
       - "8000:8000"
@@ -12,14 +12,10 @@ services:
       - redis
       - mongodb
     environment:
-      - REDIS_HOST=http://redis
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - MONGO_HOST=http://mongodb
+      - MONGO_HOST=mongodb
       - MONGO_PORT=27017
-      - MYSQL_HOST=http://mysql
-      - MYSQL_PORT=3306
-      - MYSQL_DATABASE=${MYSQL_DATABASE}
-      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
 
   mongodb:
     image: mongo:latest
@@ -29,20 +25,7 @@ services:
     networks:
       - anchoreer_network
     volumes:
-      - mongo_data:/data/db
-
-  mysql:
-    image: mysql:latest
-    container_name: mysql
-    ports:
-      - "3306:3306"
-    networks:
-      - anchoreer_network
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
-      MYSQL_DATABASE: ${MYSQL_DATABASE}
-    volumes:
-      - mysql_data:/var/lib/mysql
+      - ./mongo_data:/data/db
 
   redis:
     image: redis:latest
@@ -52,12 +35,7 @@ services:
     networks:
       - anchoreer_network
     volumes:
-      - redis_data:/data
-
-volumes:
-  mongo_data:
-  mysql_data:
-  redis_data:
+      - ./redis_data:/data
 
 networks:
   anchoreer_network:

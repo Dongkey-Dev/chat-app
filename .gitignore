@@ -238,3 +238,8 @@ pip-selfcheck.json
 
 *.ipynb
 # End of https://www.toptal.com/developers/gitignore/api/python,venv,visualstudiocode,macos
+
+mongo_data
+mongo_data/*
+redis_data
+redis_data/*
