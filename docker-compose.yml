@@ -16,21 +16,48 @@ services:
       - REDIS_PORT=6379
       - MONGO_HOST=http://mongodb
       - MONGO_PORT=27017
+      - MYSQL_HOST=http://mysql
+      - MYSQL_PORT=3306
+      - MYSQL_DATABASE=${MYSQL_DATABASE}
+      - MYSQL_PASSWORD=${MYSQL_ROOT_PASSWORD}
 
   mongodb:
     image: mongo:latest
     container_name: mongodb
     ports:
       - "27017:27017"
+    networks:
+      - anchoreer_network
     volumes:
       - mongo_data:/data/db
+
+  mysql:
+    image: mysql:latest
+    container_name: mysql
+    ports:
+      - "3306:3306"
+    networks:
+      - anchoreer_network
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+    volumes:
+      - mysql_data:/var/lib/mysql
 
   redis:
     image: redis:latest
     container_name: redis
     ports:
       - "6379:6379"
+    networks:
+      - anchoreer_network
+    volumes:
+      - redis_data:/data
 
+volumes:
+  mongo_data:
+  mysql_data:
+  redis_data:
 
 networks:
   anchoreer_network:
