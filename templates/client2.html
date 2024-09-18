@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>채팅방과 채팅 목록 백엔드 시스템 구현</title>
+    <title>채팅 애플리케이션 - 로그인</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
     <style>
         body {
@@ -23,6 +23,28 @@
         h1, h2 {
             text-align: center;
             color: #333;
+        }
+        #loginForm, #chatApplication {
+            display: none;
+        }
+        #loginForm.active, #chatApplication.active {
+            display: block;
+        }
+        input, button {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
         }
         #chatContainer {
             display: flex;
@@ -51,17 +73,6 @@
         }
         #messageInput {
             flex-grow: 1;
-            padding: 5px;
-        }
-        button {
-            padding: 5px 10px;
-            background-color: #007bff;
-            color: white;
-            border: none;
-            cursor: pointer;
-        }
-        button:hover {
-            background-color: #0056b3;
         }
         .room {
             cursor: pointer;
@@ -79,65 +90,139 @@
             background-color: #e9ecef;
             border-radius: 3px;
         }
-        #createRoomForm {
-            margin-bottom: 20px;
-            padding: 10px;
-            background-color: #e9ecef;
-            border-radius: 5px;
-        }
-        #createRoomForm input, #createRoomForm button {
-            margin: 5px 0;
-            width: 100%;
-            padding: 5px;
-        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>채팅 애플리케이션</h1>
-        <div id="createRoomForm">
-            <h2>새 채팅방 만들기</h2>
-            <input type="text" id="roomTitle" placeholder="채팅방 제목">
-            <button id="createRoomButton">채팅방 생성</button>
+        <!-- 로그인 화면 -->
+        <div id="loginForm" class="active">
+            <h1>채팅 서비스 접속</h1>
+            <button id="loginButton">접속</button>
         </div>
-        <div id="chatContainer">
-            <div id="roomList">
-                <h2>채팅방 목록</h2>
-                <!-- 채팅방 목록이 여기에 동적으로 추가됩니다 -->
+
+        <!-- 채팅 애플리케이션 화면 -->
+        <div id="chatApplication" style="display: none;">
+            <h1>채팅 애플리케이션</h1>
+            <div id="userInfo">
+                <!-- 사용자 ID 표시 -->
+                <h2 id="userIdDisplay">사용자 ID: </h2>
             </div>
-            <div id="chatArea">
-                <div id="messages">
-                    <!-- 메시지가 여기에 동적으로 추가됩니다 -->
+            <div id="createRoomForm">
+                <h2>새 채팅방 만들기</h2>
+                <input type="text" id="roomTitle" placeholder="채팅방 제목">
+                <button id="createRoomButton">채팅방 생성</button>
+            </div>
+            <div id="chatContainer">
+                <div id="roomList">
+                    <h2>채팅방 목록</h2>
+                    <!-- 채팅방 목록이 여기에 동적으로 추가됩니다 -->
                 </div>
-                <div id="inputArea">
-                    <input type="text" id="messageInput" placeholder="메시지를 입력하세요...">
-                    <button id="sendButton">전송</button>
+                <div id="chatArea">
+                    <div id="messages">
+                        <!-- 메시지가 여기에 동적으로 추가됩니다 -->
+                    </div>
+                    <div id="inputArea">
+                        <input type="text" id="messageInput" placeholder="메시지를 입력하세요...">
+                        <button id="sendButton">전송</button>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
-
     <script>
         const BASE_URL = 'http://localhost:8000';
         let ws;
         let currentRoom = 'lobby';
+        let currentUser = '';
 
-        function connectWebSocket(roomId) {
+        function login() {
             if (ws) {
                 ws.close();
             }
-            ws = new WebSocket(`ws://localhost:8000/ws/${roomId}`);
+            currentUser = generateRandomString();
+            ws = new WebSocket(`ws://localhost:8000/ws/${currentUser}`);
+            console.log('WebSocket 연결됨');
+
             ws.onmessage = function(event) {
                 const message = JSON.parse(event.data);
-                displayMessage(message);
+                handleServerMessage(message);
             };
+
+            // 접속 후 화면 전환
+            document.getElementById('loginForm').style.display = 'none';
+            document.getElementById('chatApplication').style.display = 'block';
+            
+            // 로그인 후 채팅방 목록 로드 및 5초마다 갱신
+            loadChatRooms();
+            setInterval(loadChatRooms, 5000); // 5초마다 loadChatRooms 호출
+        }
+
+        // 서버에서 채팅방 목록을 가져오는 함수
+        async function loadChatRooms() {
+            try {
+                const response = await fetch(`${BASE_URL}/chatrooms`);
+                const rooms = await response.json();
+                displayChatRooms(rooms);
+            } catch (error) {
+                console.error('채팅방 목록을 불러오는 중 오류가 발생했습니다:', error);
+            }
+        }
+
+        // 채팅방 목록을 화면에 표시하는 함수
+        function displayChatRooms(rooms) {
+            const roomList = document.getElementById('roomList');
+            roomList.innerHTML = '<h2>채팅방 목록</h2>';
+            rooms.forEach(room => {
+                const roomElement = document.createElement('div');
+                roomElement.className = 'room';
+                roomElement.innerHTML = `
+                    <strong>${room.title}</strong>
+                    <p>최근 30분 접속 인원: ${room.user_count}</p>
+                    <p>마지막 메시지: ${room.latest_message || '없음'}</p>
+                `;
+                roomElement.onclick = () => joinRoom(room.room_id);
+                roomList.appendChild(roomElement);
+            });
+        }
+
+        function generateRandomString(length = 8) {
+            return btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(length))))
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); // URL-safe Base64
+        }        
+
+        function handleServerMessage(message) {
+            if (message.event === "connected") {
+                document.getElementById('userIdDisplay').textContent = `사용자 ID: ${message.user_id}`;
+            } else if (message.event === "message") {
+                if (currentRoom === message.room_id) displayMessage(message);
+            } else if (message.event === "messages"){
+                message.messages.forEach(message => {
+                    displayMessage(message);
+                })
+            } else if (message.event === "room_created") {
+                addNewRoomToList(message);
+            }
+        }
+
+        function addNewRoomToList(message) {
+            const roomList = document.getElementById('roomList');
+            const roomElement = document.createElement('div');
+            roomElement.className = 'room';
+            roomElement.innerHTML = `
+                <strong>${message.title}</strong>
+                <p>최근 30분 접속 인원: 0</p>
+                <p>마지막 메시지: 없음</p>
+            `;
+            roomElement.onclick = () => joinRoom(message.room_id);
+            roomList.appendChild(roomElement);
         }
 
         function displayMessage(message) {
+            console.log(`displayMessage: ${message}`);
             const messagesDiv = document.getElementById('messages');
             const messageElement = document.createElement('div');
             messageElement.className = 'message';
-            messageElement.textContent = `${message.sender}: ${message.message} (${moment(message.timestamp).format('HH:mm:ss')})`;
+            messageElement.textContent = `${message.sender}: ${message.message} (${moment(message.timestamp).format('HH:mm:ss')} UTC)`;
             messagesDiv.appendChild(messageElement);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         }
@@ -147,6 +232,7 @@
             const message = input.value.trim();
             if (message) {
                 ws.send(JSON.stringify({
+                    type: "message",
                     room_id: currentRoom,
                     content: message,
                     timestamp: new Date().toISOString()
@@ -155,53 +241,32 @@
             }
         }
 
-        function loadChatRooms() {
-            fetch(`${BASE_URL}/chatrooms`)
-                .then(response => response.json())
-                .then(rooms => {
-                    const roomList = document.getElementById('roomList');
-                    roomList.innerHTML = '<h2>채팅방 목록</h2>';
-                    rooms.forEach(room => {
-                        const roomElement = document.createElement('div');
-                        roomElement.className = 'room';
-                        roomElement.textContent = room.title;
-                        roomElement.onclick = () => joinRoom(room.room_id);
-                        roomList.appendChild(roomElement);
-                    });
-                });
-        }
-
         function joinRoom(roomId) {
+            ws.send(JSON.stringify({
+                type: "join_room",
+                room_id: roomId,
+                content: '',
+                timestamp: new Date().toISOString()
+            }));
             currentRoom = roomId;
-            connectWebSocket(roomId);
-            document.getElementById('messages').innerHTML = '';
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.textContent = '';
             console.log(`Joined room: ${roomId}`);
         }
 
         function createRoom() {
-            const title = document.getElementById('roomTitle').value.trim();
-
-            fetch(`${BASE_URL}/chatrooms`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    title: title
-                }),
-            })
-            .then(response => response.json())
-            .then(data => {
-                alert(data.message);
-                loadChatRooms();
+            const roomTitle = document.getElementById('roomTitle').value.trim();
+            if (roomTitle) {
+                ws.send(JSON.stringify({
+                    type: "create_room",
+                    title: roomTitle
+                }));
+                console.log('채팅방 생성 요청 보냄');
                 document.getElementById('roomTitle').value = '';
-            })
-            .catch((error) => {
-                console.error('Error:', error);
-                alert('채팅방 생성에 실패했습니다.');
-            });
+            }
         }
 
+        document.getElementById('loginButton').onclick = login;
         document.getElementById('sendButton').onclick = sendMessage;
         document.getElementById('messageInput').onkeypress = function(e) {
             if (e.key === 'Enter') {
@@ -209,13 +274,6 @@
             }
         };
         document.getElementById('createRoomButton').onclick = createRoom;
-
-        // 초기 설정
-        loadChatRooms();
-        connectWebSocket(currentRoom);
-
-        // 주기적으로 채팅방 목록 갱신
-        setInterval(loadChatRooms, 5000);
     </script>
 </body>
 </html>

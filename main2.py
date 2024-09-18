@@ -1,17 +1,15 @@
+import asyncio
+from bson import ObjectId
 from datetime import datetime, timezone
 import json
-from typing import List
 from fastapi import (
-    BackgroundTasks,
     FastAPI,
     APIRouter,
     Request,
     WebSocket,
     WebSocketDisconnect,
-    HTTPException,
 )
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 import os
 from redis.asyncio import Redis
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -26,30 +24,11 @@ redis_host = os.getenv("REDIS_HOST", "localhost")
 redis_port = int(os.getenv("REDIS_PORT", "6379"))
 mongodb_host = os.getenv("MONGO_HOST", "localhost")
 mongodb_port = int(os.getenv("MONGO_PORT", "27017"))
-mysql_host = os.getenv("MYSQL_HOST", "localhost")
-mysql_port = int(os.getenv("MYSQL_PORT", "3306"))
-mysql_user = os.getenv("MYSQL_USER", "root")
 
 # Redis 및 MongoDB 클라이언트 초기화
 redis = Redis(host=redis_host, port=redis_port, decode_responses=True)
 mongo_client = AsyncIOMotorClient(f"mongodb://{mongodb_host}:{mongodb_port}/")
 chat_db = mongo_client["chat_database"]
-
-
-async def get_ai_generated_user_id():
-    # Redis의 "user:id:counter" 키를 사용하여 고유 ID 증가
-    user_id = await redis.incr("user:id:counter")
-    # user_id를 문자열로 변환하여 반환
-    return f"user_{user_id}"
-
-
-# 사용자 ID를 Redis에서 관리
-async def add_user_to_room(room_id: str, user_id: str):
-    await redis.sadd(f"room:{room_id}:users", user_id)
-
-
-async def remove_user_from_room(room_id: str, user_id: str):
-    await redis.srem(f"room:{room_id}:users", user_id)
 
 
 async def save_message(room_id: str, message: str, sender: str):
@@ -75,20 +54,12 @@ async def get_all_messages(room_id: str):
     # datetime 객체를 문자열로 변환
     return [
         {
-            "message": json.loads(message["message"])["content"],
+            "message": message["message"],
             "sender": message["sender"],
             "timestamp": message["timestamp"].isoformat(),
         }
         for message in messages
     ]
-
-
-async def publish_message(room_id: str, message: str, sender: str):
-    await redis.publish(f"room:{room_id}:{sender}", message)
-
-
-async def set_room_user_expiration(room_id: str):
-    await redis.expire(f"room:{room_id}:users", 1800)  # 30분 TTL 설정
 
 
 async def get_chat_rooms():
@@ -119,14 +90,31 @@ async def get_chat_rooms():
     return room_list
 
 
+async def add_user_to_room(room_id: str, user_id: str):
+    await redis.zadd(f"room:{room_id}:users", {user_id: 9999999999})
+    await update_room_user_count(room_id)
+
+
+async def remove_user_from_room(room_id: str, user_id: str):
+    current_time = datetime.now().timestamp()
+    await redis.zadd(f"room:{room_id}:users", {user_id: current_time})
+    await update_room_user_count(room_id)
+
+
+async def update_room_user_count(room_id: str):
+    # 30분 내의 활성 사용자 수를 계산하여 Redis에 반영
+    current_time = datetime.now().timestamp()
+    # 30분이 지난 사용자들을 제거
+    await redis.zremrangebyscore(f"room:{room_id}:users", 0, current_time - 1800)
+    # 현재 방의 30분 내 활성 사용자 수를 ZSet에 업데이트
+    user_count = await redis.zcard(f"room:{room_id}:users")
+    await redis.zadd("chatroom:user_count", {room_id: user_count})
+
+
 async def create_room(title: str):
-    room = {"title": title}
+    room = {"title": title, "participants": []}
     result = await chat_db.chat_rooms.insert_one(room)
     return str(result.inserted_id)
-
-
-async def get_chat_room(room_id: str):
-    return await chat_db.chat_rooms.find_one({"_id": room_id})
 
 
 async def get_messages(room_id: str, limit: int = 50):
@@ -147,21 +135,14 @@ async def handle_message(room_id: str, message: str, sender: str):
 
 async def add_user_to_room_in_db(room_id: str, user_id: str):
     # MongoDB에 방에 참여자 추가
-    await chat_db.rooms.update_one(
-        {"_id": room_id}, {"$addToSet": {"participants": user_id}}
-    )
-
-
-async def remove_user_from_room_in_db(room_id: str, user_id: str):
-    # MongoDB에서 방에서 참여자 제거
-    await chat_db.rooms.update_one(
-        {"_id": room_id}, {"$pull": {"participants": user_id}}
+    await chat_db.chat_rooms.update_one(
+        {"_id": ObjectId(room_id)}, {"$addToSet": {"participants": user_id}}
     )
 
 
 async def get_room_participants(room_id: str):
     # MongoDB에서 특정 방의 참여자 목록 조회
-    room = await chat_db.rooms.find_one({"_id": room_id})
+    room = await chat_db.chat_rooms.find_one({"_id": ObjectId(room_id)})
     return room.get("participants", []) if room else []
 
 
@@ -169,26 +150,9 @@ async def get_room_participants(room_id: str):
 connected_clients = {}
 
 
-# async def redis_subscriber(room_id: str):
-#     pubsub = redis.pubsub()
-#     await pubsub.subscribe(f"room:{room_id}:*")
-
-#     async for message in pubsub.listen():
-#         if message and message["type"] == "message":
-#             room_channel = message["channel"].decode()
-#             room_id_extracted = room_channel.split(":")[1]
-#             sender = room_channel.split(":")[2]
-#             data = message["data"].decode()
-
-#             # 연결된 모든 클라이언트에 메시지 전송
-#             if room_id_extracted in connected_clients:
-#                 for client in connected_clients[room_id_extracted].values():
-#                     await client.send_text(data)
-
-
-# 채팅방 생성 요청 모델
-class CreateChatRoomRequest(BaseModel):
-    title: str
+async def handle_join_room_event(user_id: str, room_id: str):
+    # MongoDB에 참여자 추가
+    await add_user_to_room_in_db(room_id, user_id)
 
 
 # 클라이언트 페이지 렌더링
@@ -199,72 +163,133 @@ async def client(request: Request):
 
 @router.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):
-    await websocket.accept()
+    """WebSocket을 통해 사용자 연결을 관리하는 엔드포인트"""
 
-    # 유저별 웹소켓을 연결하여 관리
-    if user_id not in connected_clients:
-        connected_clients[user_id] = websocket
+    await websocket.accept()
+    connected_clients[user_id] = websocket
+    await send_initial_data(websocket, user_id)
 
     try:
-        while True:
-            data = await websocket.receive_text()
-            event_data = json.loads(data)
-
-            # 이벤트 타입을 확인하여 처리
-            if event_data["type"] == "join_room":
-                room_id = event_data["room_id"]
-
-                # MongoDB에 방 참여자 정보 추가
-                await add_user_to_room_in_db(room_id, user_id)
-
-                # 현재 방에 참여 중인 다른 클라이언트들에게 알림
-                participants = await get_room_participants(room_id)
-                for participant_id in participants:
-                    if (
-                        participant_id in connected_clients
-                        and participant_id != user_id
-                    ):
-                        await connected_clients[participant_id].send_json(
-                            {
-                                "event": "user_joined",
-                                "user_id": user_id,
-                                "room_id": room_id,
-                            }
-                        )
-
-            elif event_data["type"] == "message":
-                # 방에 메시지를 보냈을 때 처리
-                room_id = event_data["room_id"]
-                message_content = event_data["content"]
-
-                # 메시지 처리 및 저장
-                await handle_message(room_id, message_content, user_id)
-
-                # 방의 모든 사용자에게 메시지 전달
-                participants = await get_room_participants(room_id)
-                for participant_id in participants:
-                    if participant_id in connected_clients:
-                        await connected_clients[participant_id].send_json(
-                            {
-                                "message": message_content,
-                                "sender": user_id,
-                                "timestamp": datetime.now().isoformat(),
-                            }
-                        )
+        await asyncio.gather(handle_messages(websocket, user_id), log_status())
     except WebSocketDisconnect:
-        # 유저의 웹소켓 연결 해제 시 클라이언트 목록에서 제거
+        await handle_disconnect(user_id)
+
+
+async def send_initial_data(websocket: WebSocket, user_id: str):
+    """클라이언트가 연결되면 방 목록과 유저 ID를 전송"""
+    room_list = await get_chat_rooms()
+    await websocket.send_json(
+        {"event": "connected", "user_id": user_id, "rooms": room_list}
+    )
+
+
+async def handle_messages(websocket: WebSocket, user_id: str):
+    """WebSocket으로부터 메시지를 수신 및 처리하는 함수"""
+    while True:
+        data = await websocket.receive_text()
+        event_data = json.loads(data)
+
+        # match 문을 사용해 이벤트 타입에 따른 분기 처리
+        match event_data.get("type"):
+            case "join_room":
+                await handle_join_room_event(websocket, user_id, event_data)
+            case "message":
+                await handle_chat_message_event(user_id, event_data)
+            case "create_room":
+                await handle_create_room_event(event_data)
+
+
+async def handle_join_room_event(websocket: WebSocket, user_id: str, event_data: dict):
+    """유저가 방에 참여하는 이벤트 처리"""
+    room_id = event_data["room_id"]
+
+    messages = await get_all_messages(room_id)
+    await websocket.send_json({"event": "messages", "messages": messages})
+
+    if not await is_user_in_room(user_id, room_id):
+        await add_user_to_room(room_id, user_id)
+        await add_user_to_room_in_db(room_id, user_id)
+        await notify_room_participants(room_id, "님이 방에 참여했습니다.", user_id)
+
+
+async def handle_chat_message_event(user_id: str, event_data: dict):
+    """채팅 메시지를 처리하고 다른 사용자에게 전달"""
+    room_id = event_data["room_id"]
+    message_content = event_data["content"]
+
+    await handle_message(room_id, message_content, user_id)
+    await notify_room_participants(room_id, message_content, user_id)
+
+
+async def handle_create_room_event(event_data: dict):
+    """새로운 채팅방을 생성하고 클라이언트들에게 알림"""
+    title = event_data["title"]
+    room_id = await create_room(title)
+
+    await notify_all_clients(
+        {"event": "room_created", "room_id": room_id, "title": title}
+    )
+
+
+async def notify_room_participants(room_id: str, message: str, sender: str):
+    """방에 있는 모든 사용자에게 메시지를 전송"""
+    participants = await get_room_participants(room_id)
+    for participant_id in participants:
+        if participant_id in connected_clients:
+            await connected_clients[participant_id].send_json(
+                {
+                    "event": "message",
+                    "message": message,
+                    "sender": sender,
+                    "room_id": room_id,
+                    "timestamp": datetime.now().isoformat(),
+                }
+            )
+
+
+async def notify_all_clients(event_data: dict):
+    """모든 클라이언트에게 이벤트 알림"""
+    for client in connected_clients.values():
+        await client.send_json(event_data)
+
+
+async def is_user_in_room(user_id: str, room_id: str) -> bool:
+    """사용자가 해당 방에 이미 참여 중인지 확인"""
+    user_rooms = await get_user_rooms_from_redis(user_id)
+    return room_id in user_rooms
+
+
+async def handle_disconnect(user_id: str):
+    """클라이언트 연결이 끊겼을 때 처리"""
+    if user_id in connected_clients:
         del connected_clients[user_id]
 
+    user_rooms = await get_user_rooms_from_redis(user_id)
+    for room_id in user_rooms:
+        await remove_user_from_room(room_id, user_id)
+        await notify_room_participants(
+            room_id, f"{user_id}님이 방을 떠났습니다.", user_id
+        )
 
-# 채팅방 생성
-@router.post("/chatrooms")
-async def create_chat_room(request: CreateChatRoomRequest):
+
+async def log_status():
+    """주기적으로 WebSocket 연결 상태를 로그로 출력"""
     try:
-        room = await create_room(request.title)
-        return {"message": "채팅방이 생성되었습니다.", "room": room}
-    except Exception as e:
-        print(e)
-        raise HTTPException(status_code=400, detail=str(e))
+        while True:
+            await asyncio.sleep(1)
+    except asyncio.CancelledError:
+        pass
+
+
+async def get_user_rooms_from_redis(user_id: str):
+    # 모든 방의 사용자 목록에서 해당 사용자를 포함하는 방만 선택
+    room_keys = await redis.keys("room:*:users")
+    user_rooms = []
+    for room_key in room_keys:
+        if await redis.zscore(room_key, user_id):
+            room_id = room_key.split(":")[1]
+            user_rooms.append(room_id)
+    return user_rooms
 
 
 # 채팅방 목록 조회
